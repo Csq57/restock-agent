@@ -18,3 +18,12 @@ DECISIONS.md
 VIDEO_SCRIPT.md
 SUBMISSION.md
 ORACLE_FIRST_PLACE.md
+
+# recording artefacts (video goes to YouTube, not the repo)
+demo.mp4
+build/
+rec/
+frames/
+voice/
+record.cjs
+assemble.py

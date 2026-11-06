@@ -336,6 +336,12 @@ window.addEventListener("DOMContentLoaded", async () => {
       document.getElementById("approveUrl").innerHTML = out.order.approve_url
         ? "PayPal approval link: <a href=\"" + out.order.approve_url + "\" target=\"_blank\" rel=\"noopener\">" + out.order.approve_url + "</a>"
         : "";
+      // the earlier "NOT made" sentence is now false - drop it before showing the receipt
+      const replyEl = document.getElementById("reply");
+      replyEl.innerHTML = replyEl.innerHTML.replace(/Payment:\s*NOT made\.[\s\S]*?(<br><br>|$)/i, "");
+      setNote("Payment: PAID by a human approval - PayPal order " + out.order.paypal_order_id +
+              ", capture " + out.order.capture_id + ", " + Number(out.order.amount).toFixed(2) +
+              " " + out.order.currency + ".", null);
       setStatus(out.order.settled
         ? "paid in PayPal sandbox - order " + out.order.paypal_order_id + " - capture " + out.order.capture_id + " - " + Number(out.order.amount).toFixed(2) + " " + out.order.currency
         : "order " + out.order.paypal_order_id + " created (" + out.mode + ") - " + Number(out.order.amount).toFixed(2) + " " + out.order.currency + " - awaiting payer approval");
