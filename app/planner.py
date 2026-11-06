@@ -46,12 +46,12 @@ def _row_preview(rows: Iterable[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
 
 def build_draft(budget: float, exclude: Iterable[str] = (), overrides: Mapping[str, int] | None = None,
-                previous: dict[str, Any] | None = None) -> dict[str, Any]:
+                previous: dict[str, Any] | None = None, _probe: bool = False) -> dict[str, Any]:
     """Allocate a purchase order under a hard budget.
 
     Order of allocation is urgency (days_of_cover ascending) so the money goes to
     whatever runs out first. Anything that does not fit is reported, never silently
-    dropped.
+    dropped - and each dropped line is priced, so a buyer can see what one more SKU costs.
     """
     budget = _money(max(0.0, float(budget)))
     exclude = {s.strip().upper() for s in exclude}
@@ -59,6 +59,7 @@ def build_draft(budget: float, exclude: Iterable[str] = (), overrides: Mapping[s
 
     candidates: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
+    partials: list[dict[str, Any]] = []
 
     for row in catalog.inventory():
         sku = row["sku"].upper()
@@ -94,6 +95,7 @@ def build_draft(budget: float, exclude: Iterable[str] = (), overrides: Mapping[s
         room = _money(budget - spent)
 
         if cost > room + EPS:
+            wanted_qty = qty
             affordable = int(math.floor((room / price) + EPS))
             affordable = (affordable // row["moq"]) * row["moq"]
             if sku in overrides:
@@ -102,10 +104,18 @@ def build_draft(budget: float, exclude: Iterable[str] = (), overrides: Mapping[s
                 skipped.append({"sku": row["sku"], "name": row["name"],
                                 "reason": "over_budget",
                                 "wanted_qty": qty, "wanted_cost": cost,
-                                "room_left": room})
+                                "room_left": room,
+                                "min_qty": row["moq"],
+                                "min_cost": _money(row["moq"] * price),
+                                "days_of_cover_now": round(row["_cover"], 2)})
                 continue
             qty = affordable
             cost = _money(qty * price)
+            partials.append({"sku": row["sku"], "name": row["name"],
+                             "have_qty": qty,
+                             "moq": row["moq"],
+                             "moq_cost": _money(row["moq"] * price),
+                             "days_of_cover": round(row["_cover"], 2)})
 
         spent = _money(spent + cost)
         lines.append({
@@ -135,7 +145,69 @@ def build_draft(budget: float, exclude: Iterable[str] = (), overrides: Mapping[s
     if previous:
         draft["diff"] = diff(previous, draft)
         draft["replanned_from"] = previous.get("id")
+    if not _probe:
+        draft["next_unlock"] = next_unlock(budget, _money(budget - spent), skipped, partials, exclude)
     return draft
+
+
+def next_unlock(budget: float, headroom: float, skipped: list[dict[str, Any]],
+                partials: list[dict[str, Any]], exclude: Iterable[str]) -> dict[str, Any] | None:
+    """The single most useful "one more step" for the buyer, and what it costs.
+
+    Two shapes, in order of usefulness:
+      1. add_moq - a line already in the order was trimmed by the budget. One more minimum
+         order quantity of that line is the natural next purchase.
+      2. add_sku - nothing was trimmed, so quote the cheapest budget increase that actually
+         brings a skipped SKU back.
+
+    Every candidate is re-planned and re-checked, so the number cannot be decorative.
+    """
+    excluded = {s.strip().upper() for s in exclude}
+    best: dict[str, Any] | None = None
+
+    for p in partials:
+        trial = build_draft(budget=_money(budget + p["moq_cost"]), exclude=excluded, _probe=True)
+        got = next((l["qty"] for l in trial["lines"] if l["sku"] == p["sku"]), 0)
+        if got <= p["have_qty"]:
+            continue
+        candidate = {
+            "action": "add_moq",
+            "sku": p["sku"],
+            "name": p["name"],
+            "unlock_cost": p["moq_cost"],
+            "adds_qty": got - p["have_qty"],
+            "budget_after": _money(budget + p["moq_cost"]),
+            "days_of_cover_now": p["days_of_cover"],
+        }
+        if best is None or (candidate["days_of_cover_now"], candidate["unlock_cost"]) < \
+                (best["days_of_cover_now"], best["unlock_cost"]):
+            best = candidate
+    if best:
+        return best
+
+    verified: list[dict[str, Any]] = []
+    for item in skipped:
+        if item["reason"] != "over_budget":
+            continue
+        delta = _money(item["min_cost"] - headroom)
+        if delta <= 0:
+            continue
+        trial = build_draft(budget=_money(budget + delta), exclude=excluded, _probe=True)
+        if item["sku"] not in [l["sku"] for l in trial["lines"]]:
+            continue  # the extra money went to an earlier partial fill instead
+        verified.append({
+            "action": "add_sku",
+            "sku": item["sku"],
+            "name": item["name"],
+            "unlock_cost": delta,
+            "adds_qty": item["min_qty"],
+            "budget_after": _money(budget + delta),
+            "days_of_cover_now": item.get("days_of_cover_now"),
+        })
+    if not verified:
+        return None
+    affordable = [v for v in verified if v["unlock_cost"] <= budget * 0.25] or verified
+    return min(affordable, key=lambda v: (v["days_of_cover_now"] or 99, v["unlock_cost"]))
 
 
 def diff(old: Mapping[str, Any], new: Mapping[str, Any]) -> list[dict[str, Any]]:

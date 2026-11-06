@@ -54,19 +54,27 @@ Restock Agent turns that into one screen and one approval.
    silently.
 4. **Re-plan** — change the budget and the same tool runs again, returning a diff of what was
    dropped, added or resized. This is the agent acting, not a suggestion engine.
-5. **Approve → pay** — a human reviews/edits quantities in the AG Grid table, then
-   `POST /api/approve` creates a PayPal order and `POST /api/capture` captures it. Money only moves
-   after the approval click.
+5. **Price the trade-off** — every draft carries `next_unlock`: the single next purchase worth
+   making and what it costs. If a line was trimmed by the budget it quotes one more MOQ of that
+   line; otherwise it quotes the cheapest budget increase that brings a skipped SKU back. Each
+   answer is produced by re-running the allocator at the higher budget, so the number on screen is
+   verified rather than estimated (`tests/test_boundaries.py::test_skipped_items_price_the_trade_off`).
+6. **Approve → pay** — a human reviews/edits quantities in the AG Grid table, then
+   `POST /api/approve` (with the approval token) creates a PayPal order and `POST /api/capture`
+   captures it. Money only moves after the approval click.
 
 ## Guardrails (the part judges should test)
 
 | Guard | Behaviour |
 |---|---|
 | Hard budget ceiling | `total ≤ budget` is enforced at draft time **and** re-checked at approve time, after any manual edit |
+| **Approval token** | approving requires `HMAC(secret, draft_id : total : line_count)`. Editing a quantity changes the total, which invalidates every token issued before the edit, so an approval can never be replayed against a different amount. The token is issued to the review surface only - never to the model |
 | **The model cannot set its own budget** | `budget_usd` is not a tool parameter. The ceiling lives in server-side session state; if the model tries to send a budget anyway it is logged as `agent.budget_override_refused` and ignored. An assertion fails loudly if a draft ever carries a different ceiling |
 | **The model cannot pay** | `pay_purchase_order` is not in the tool schema the model sees, and the dispatcher raises `PermissionError` if it is called anyway. Money moves only from the human Approve click |
 | Catalog price drift | if the supplier price moved since the draft, the order is refused with a `price_drift` error and the draft must be re-planned |
 | Idempotency | `PayPal-Request-Id` on create, stable key on capture; a double click returns the first capture with `deduplicated: true` |
+| Crash recovery | before every capture the order is re-read from PayPal. If it was already charged while our write was lost, the local row is repaired from that response instead of charging again (`order.reconciled`) |
+| Concurrent approve | `claim_for_payment` moves the draft to `approving` inside one `BEGIN IMMEDIATE` transaction; a second caller loses the race and gets `illegal_transition` |
 | State machine | `draft → awaiting_capture → paid`, `→ cancelled`; illegal transitions raise `illegal_transition`, and a paid order can never be cancelled |
 | Empty / zero drafts | an empty order is refused |
 

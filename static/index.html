@@ -28,6 +28,8 @@
   button.pay { background:var(--ok); color:#fff; border-color:var(--ok); }
   button:disabled { opacity:.45; cursor:not-allowed; }
   #reply { margin:10px 0 0; padding:10px 12px; background:#f1f5f9; border-radius:8px; font-size:13px; max-height:170px; overflow:auto; }
+  .note { margin-top:6px; font-size:12px; color:#065f46; background:#ecfdf5; border:1px solid #a7f3d0; border-radius:8px; padding:6px 10px; }
+  .note:empty { display:none; }
   .trace { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; font-size:11px; color:var(--muted); }
   .trace code { background:#eef2ff; color:#3730a3; padding:2px 6px; border-radius:6px; }
   #grid { height:320px; width:100%; margin-top:12px; }
@@ -61,6 +63,7 @@
         <input type="text" id="message" placeholder="Optional instruction, e.g. skip SKU-1009, cups are fine" />
       </div>
       <div id="reply">Press "Plan restock" and the agent reads the inventory CSV, quotes the catalog, and drafts a purchase order under your budget.</div>
+      <div id="note" class="note"></div>
       <div class="trace" id="trace"></div>
 
       <div id="grid" class="ag-theme-quartz"></div>
@@ -157,7 +160,11 @@ function renderSkipped() {
   if (!draft || !draft.skipped || !draft.skipped.length) { box.textContent = "Nothing dropped."; return; }
   box.innerHTML = draft.skipped.map(s =>
     "<div><b>" + s.sku + "</b> " + s.name + "<br/><span style=\"color:#94a3b8\">" + s.reason.replace(/_/g, " ") + "</span>" +
-    (s.wanted_cost ? " - wanted $" + Number(s.wanted_cost).toFixed(2) + ", room $" + Number(s.room_left).toFixed(2) : "") +
+    (s.unlock_cost
+      ? " &middot; <b>+$" + Number(s.unlock_cost).toFixed(2) + " unlocks " + Number(s.covers_days).toFixed(1) + " days</b>"
+      : s.min_cost
+        ? " &middot; 1 MOQ (" + s.min_qty + ") = $" + Number(s.min_cost).toFixed(2)
+        : "") +
     "</div>").join("");
 }
 
@@ -187,6 +194,7 @@ async function doPlan(budget, message) {
   try {
     const out = await api("/api/plan", "POST", { budget_usd: budget, message: message || "" });
     document.getElementById("reply").innerHTML = fmt(out.reply);
+    document.getElementById("note").textContent = out.note || "";
     loadDraft(out.draft, out.trace);
     setStatus("engine: " + out.engine + " - draft " + out.draft.id + " - nothing charged yet");
     await refreshEvents();

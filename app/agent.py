@@ -20,10 +20,25 @@ SYSTEM = (
     "The budget ceiling is set by the merchant's system, not by you: you cannot pass a budget to any "
     "tool and you cannot pay. Never claim a purchase is paid; payment requires human approval. "
     "When the merchant changes the budget, your draft is rebuilt for you - explain what was cut and why. "
-    "Answer in at most 120 words, as plain text: no markdown, no bullet asterisks."
+    "Answer in at most 100 words, as plain text: no markdown, no asterisks, no bullet points."
 )
 
 MAX_STEPS = 6
+
+
+def _unlock_note(draft: dict[str, Any]) -> str | None:
+    """A verified sentence from the planner, shown next to whatever the model wrote.
+
+    The model is free to phrase the trade-off however it likes; this line is computed and
+    re-checked by build_draft, so the number on screen is never a hallucination.
+    """
+    unlock = draft.get("next_unlock")
+    if not unlock:
+        return None
+    cover = f" (currently {unlock['days_of_cover_now']} days of cover)" if unlock.get("days_of_cover_now") else ""
+    verb = "adds" if unlock.get("action") == "add_moq" else "restores"
+    return (f"Planner: +${unlock['unlock_cost']:.2f} (budget ${unlock['budget_after']:.2f}) {verb} "
+            f"{unlock['adds_qty']} x {unlock['name']}{cover}. Re-planned and re-checked, not estimated.")
 
 
 def _chat(messages: list[dict[str, Any]]) -> dict[str, Any]:
@@ -32,7 +47,7 @@ def _chat(messages: list[dict[str, Any]]) -> dict[str, Any]:
         headers={"Authorization": f"Bearer {settings.llm_api_key}",
                  "Content-Type": "application/json"},
         json={"model": settings.llm_model, "messages": messages,
-              "tools": tools.TOOL_SCHEMAS, "tool_choice": "auto", "temperature": 0.2},
+              "tools": tools.TOOL_SCHEMAS, "tool_choice": "auto", "temperature": 0.0},
         timeout=60,
     )
     r.raise_for_status()
@@ -69,7 +84,8 @@ def plan(budget: float, message: str = "") -> dict[str, Any]:
     if not settings.has_llm:
         reply, trace, draft = _deterministic(budget)
         store.log("agent.plan", "deterministic", {"budget": budget, "total": draft["total"]})
-        return {"reply": reply, "trace": trace, "draft": draft, "engine": "deterministic"}
+        return {"reply": reply, "trace": trace, "draft": draft, "engine": "deterministic",
+                "note": _unlock_note(draft)}
 
     ctx = {"budget": float(budget)}
     messages: list[dict[str, Any]] = [
@@ -118,4 +134,5 @@ def plan(budget: float, message: str = "") -> dict[str, Any]:
               {"budget": budget, "total": draft["total"],
                "tools": [t["tool"] for t in trace]})
     return {"reply": reply, "trace": trace, "draft": draft,
-            "engine": "llm-fallback" if fell_back else "llm"}
+            "engine": "llm-fallback" if fell_back else "llm",
+            "note": _unlock_note(draft)}

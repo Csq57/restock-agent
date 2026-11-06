@@ -57,6 +57,23 @@ class GuardTests(unittest.TestCase):
             if s["reason"] == "over_budget":
                 self.assertGreater(s["wanted_cost"], s["room_left"])
 
+    def test_skipped_items_price_the_trade_off(self):
+        d = self._draft(300)
+        top = d["next_unlock"]
+        self.assertIsNotNone(top, "a $300 budget must leave something out")
+        self.assertGreater(top["unlock_cost"], 0)
+        self.assertAlmostEqual(top["budget_after"], round(d["budget"] + top["unlock_cost"], 2), places=2)
+        if top["action"] == "add_moq":
+            before = next(l for l in d["lines"] if l["sku"] == top["sku"])["qty"]
+            bigger = planner.build_draft(budget=top["budget_after"])
+            after = next(l["qty"] for l in bigger["lines"] if l["sku"] == top["sku"])
+            self.assertGreater(after, before)          # the delta really buys more
+            self.assertEqual(after - before, top["adds_qty"])
+        else:
+            # the quoted delta must actually work when applied - not a decorative number
+            bigger = planner.build_draft(budget=top["budget_after"])
+            self.assertIn(top["sku"], [l["sku"] for l in bigger["lines"]])
+
     # 2 ------------------------------------------------------------ re-plan
     def test_replan_under_a_smaller_budget_changes_the_order(self):
         big = self._draft(600)
