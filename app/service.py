@@ -96,7 +96,16 @@ def _preflight(draft: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------- lifecycle
-def create_order(draft_id: str, token: str | None = None) -> dict[str, Any]:
+def create_order(draft_id: str, token: str | None = None,
+                 policy: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Approve and pay one draft.
+
+    Two ways in, and only two:
+      policy  - standing authorisation from the merchant ("pay up to $X automatically").
+                Checked against the draft total here, server-side; the agent cannot widen it.
+      token   - a one-off human review of this exact total (see approval_token).
+    Anything else is refused, whichever client is calling.
+    """
     current = store.get_draft(draft_id)
     if not current:
         raise GuardError("draft_not_found", f"draft {draft_id} does not exist")
@@ -105,7 +114,24 @@ def create_order(draft_id: str, token: str | None = None) -> dict[str, Any]:
                          f"draft {draft_id} is {current['status']}, expected draft",
                          {"status": current["status"]})
 
-    verify_approval(current, token)
+    authorised_by = "human_token"
+    if policy and policy.get("autopay_limit") is not None:
+        limit = float(policy["autopay_limit"])
+        if current["total"] > limit + EPS:
+            store.log("guard.policy_refused", draft_id,
+                      {"total": current["total"], "limit": limit})
+            raise GuardError(
+                "over_policy_limit",
+                f"draft total {current['total']:.2f} exceeds the standing limit "
+                f"{limit:.2f}; a human has to approve this one",
+                {"total": current["total"], "limit": limit},
+            )
+        authorised_by = "policy"
+        store.log("policy.auto_approve", draft_id,
+                  {"total": current["total"], "limit": limit})
+    else:
+        verify_approval(current, token)
+
     _preflight(current)
 
     draft = store.claim_for_payment(draft_id)
@@ -146,8 +172,10 @@ def create_order(draft_id: str, token: str | None = None) -> dict[str, Any]:
     })
     store.log("order.captured" if settled else "order.created", draft_id,
               {"paypal_order_id": result["id"], "amount": draft["total"],
-               "pay_mode": PAY_MODE, "capture_id": result.get("capture_id")})
-    return {**order, "pay_mode": PAY_MODE, "settled": settled}
+               "pay_mode": PAY_MODE, "capture_id": result.get("capture_id"),
+               "authorised_by": authorised_by})
+    return {**order, "pay_mode": PAY_MODE, "settled": settled,
+            "authorised_by": authorised_by}
 
 
 def reconcile(draft_id: str) -> dict[str, Any] | None:

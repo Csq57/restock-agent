@@ -59,16 +59,24 @@ Restock Agent turns that into one screen and one approval.
    line; otherwise it quotes the cheapest budget increase that brings a skipped SKU back. Each
    answer is produced by re-running the allocator at the higher budget, so the number on screen is
    verified rather than estimated (`tests/test_boundaries.py::test_skipped_items_price_the_trade_off`).
-6. **Approve → pay** — a human reviews/edits quantities in the AG Grid table, then
-   `POST /api/approve` (with the approval token) creates a PayPal order and `POST /api/capture`
-   captures it. Money only moves after the approval click.
+6. **Pay — and this is the point** — two paths, one of which has no human in it:
+   - **Standing limit (default)**: the merchant sets "auto-pay up to $X" once. `POST /api/run`
+     plans **and pays** inside that limit with no further human step. That is the agentic part:
+     nobody clicks a pay button.
+   - **Human approval**: when a draft exceeds the limit the server refuses it
+     (`over_policy_limit`), keeps the draft editable, and asks for a one-off approval token scoped
+     to that exact total. The agent proposes; a person decides.
+
+The agent never sees either authorisation — the policy check lives in `service.create_order`, not in
+the UI, so no caller can talk its way past it. The reply text is also sanitised: the model is not
+allowed to claim whether payment happened, because settlement is decided after it returns.
 
 ## Guardrails (the part judges should test)
 
 | Guard | Behaviour |
 |---|---|
-| Hard budget ceiling | `total ≤ budget` is enforced at draft time **and** re-checked at approve time, after any manual edit |
-| **Approval token** | approving requires `HMAC(secret, draft_id : total : line_count)`. Editing a quantity changes the total, which invalidates every token issued before the edit, so an approval can never be replayed against a different amount. The token is issued to the review surface only - never to the model |
+| **Standing limit** | `POST /api/run` settles only if `total ≤ autopay_limit`. The limit is compared against the draft's real total server-side; a caller that lies about the limit gets `over_policy_limit` |
+| **Approval token** | out-of-policy drafts need `HMAC(secret, draft_id : total : line_count)`. Editing a quantity changes the total and invalidates every token issued before the edit |
 | **The model cannot set its own budget** | `budget_usd` is not a tool parameter. The ceiling lives in server-side session state; if the model tries to send a budget anyway it is logged as `agent.budget_override_refused` and ignored. An assertion fails loudly if a draft ever carries a different ceiling |
 | **The model cannot pay** | `pay_purchase_order` is not in the tool schema the model sees, and the dispatcher raises `PermissionError` if it is called anyway. Money moves only from the human Approve click |
 | Catalog price drift | if the supplier price moved since the draft, the order is refused with a `price_drift` error and the draft must be re-planned |

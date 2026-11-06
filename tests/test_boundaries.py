@@ -206,6 +206,37 @@ class GuardTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             tools.dispatch("pay_purchase_order", {"draft_id": "x"}, {"budget": 100})
 
+    # 10 ------------------------------------------------ standing policy
+    def test_policy_pays_inside_the_limit_without_a_token(self):
+        d = self._draft(300)
+        order = service.create_order(d["id"], policy={"autopay_limit": 400})
+        self.assertEqual(order["authorised_by"], "policy")
+        self.assertTrue(order["settled"])
+        kinds = [e["kind"] for e in store.events(limit=20)]
+        self.assertIn("policy.auto_approve", kinds)
+
+    def test_policy_blocks_above_the_limit_and_asks_for_a_human(self):
+        d = self._draft(300)
+        with self.assertRaises(service.GuardError) as ctx:
+            service.create_order(d["id"], policy={"autopay_limit": 100})
+        self.assertEqual(ctx.exception.code, "over_policy_limit")
+        self.assertFalse(self.mock.calls, "an over-limit draft must never reach PayPal")
+        self.assertEqual(store.get_draft(d["id"])["status"], "draft", "draft stays editable")
+
+    def test_human_token_still_works_above_the_policy(self):
+        d = self._draft(300)
+        order = service.create_order(d["id"], service.approval_token(d))
+        self.assertEqual(order["authorised_by"], "human_token")
+        self.assertTrue(order["settled"])
+
+    def test_policy_is_checked_server_side_not_by_the_caller(self):
+        d = self._draft(600)
+        # a caller that lies about the limit still gets stopped by the draft's real total
+        with self.assertRaises(service.GuardError):
+            service.create_order(d["id"], policy={"autopay_limit": d["total"] - 0.01})
+        ok = service.create_order(d["id"], policy={"autopay_limit": d["total"]})
+        self.assertTrue(ok["settled"])
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

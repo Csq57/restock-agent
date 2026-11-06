@@ -35,6 +35,13 @@ class ApprovalIn(BaseModel):
     approval_token: str | None = None
 
 
+class RunIn(BaseModel):
+    """One autonomous restock run: plan, then pay if the result is inside the standing policy."""
+    budget_usd: float = Field(gt=0, le=100_000)
+    autopay_limit_usd: float = Field(ge=0, le=100_000)
+    message: str = ""
+
+
 def _reviewable(draft: dict[str, Any]) -> dict[str, Any]:
     """Attach the token that a human review of this exact state produces.
 
@@ -99,6 +106,32 @@ def edit(body: EditIn) -> dict[str, Any]:
     store.save_draft(updated)
     store.log("draft.edited", updated["id"], {"total": updated["total"]})
     return {"draft": _reviewable(updated)}
+
+
+@app.post("/api/run")
+def run(body: RunIn) -> dict[str, Any]:
+    """The autonomous path: the agent plans and pays inside the merchant's standing limit.
+
+    The human set the limit once. The agent spends inside it without asking, and is stopped
+    by the server - not by the UI - the moment a draft would cross it.
+    """
+    out = agent.plan(body.budget_usd, body.message)
+    out["reply"] = agent.strip_payment_claims(out["reply"])
+    draft = out["draft"]
+    out["draft"] = _reviewable(draft)
+    try:
+        order = service.create_order(draft["id"],
+                                     policy={"autopay_limit": body.autopay_limit_usd})
+        out["reply"] += "\n\n" + agent.settlement_line(order, "auto_paid")
+        return {**out, "decision": "auto_paid", "order": order,
+                "draft": _reviewable(store.get_draft(draft["id"]) or {})}
+    except service.GuardError as exc:
+        if exc.code == "over_policy_limit":
+            out["reply"] += "\n\n" + agent.settlement_line(None, "needs_approval", exc.detail)
+            return {**out, "decision": "needs_approval",
+                    "blocked": {"code": exc.code, "message": exc.message, **exc.detail}}
+        raise HTTPException(status_code=409, detail={"code": exc.code, "message": exc.message,
+                                                     **exc.detail}) from exc
 
 
 @app.post("/api/approve/{draft_id}")

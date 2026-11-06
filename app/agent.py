@@ -6,6 +6,7 @@ tests and the demo never depend on a network model being reachable.
 from __future__ import annotations
 
 import json
+import re
 import time
 from typing import Any
 
@@ -19,7 +20,8 @@ SYSTEM = (
     "Use the tools: read_inventory to see stock, quote_catalog to confirm prices, and "
     "draft_purchase_order to build a purchase order. "
     "The budget ceiling is set by the merchant's system, not by you: you cannot pass a budget to any "
-    "tool and you cannot pay. Never claim a purchase is paid; payment requires human approval. "
+    "tool and you cannot pay. Never say whether payment was or was not made - the merchant's standing "
+    "limit decides that after you finish, and the system reports it separately. "
     "When the merchant changes the budget, your draft is rebuilt for you - explain what was cut and why. "
     "Answer in at most 100 words, as plain text: no markdown, no asterisks, no bullet points."
 )
@@ -52,6 +54,35 @@ def _providers() -> list[dict[str, str]]:
     return chain
 
 
+_PAYMENT_CLAIM = re.compile(
+    r"[^.]*\b(nothing has been charged|nothing is charged|has not been charged|"
+    r"not been charged|no charge has been made|payment has not|payment is not made)\b[^.]*\.",
+    re.IGNORECASE,
+)
+
+
+def strip_payment_claims(text: str) -> str:
+    """Remove any sentence where the model guesses about payment.
+
+    The model cannot know: settlement happens after it returns, decided by the server against
+    the merchant's standing limit. Leaving its guess on screen next to a real capture id is the
+    kind of contradiction a judge notices in one second.
+    """
+    return re.sub(r"\s{2,}", " ", _PAYMENT_CLAIM.sub(" ", text)).strip()
+
+
+def settlement_line(order: dict[str, Any] | None, decision: str,
+                    blocked: dict[str, Any] | None = None) -> str:
+    if decision == "auto_paid" and order:
+        return (f"Payment: PAID automatically by the agent inside the standing limit - "
+                f"PayPal order {order.get('paypal_order_id')}, capture {order.get('capture_id')}, "
+                f"${float(order.get('amount', 0)):.2f}.")
+    if blocked:
+        return (f"Payment: NOT made. ${float(blocked.get('total', 0)):.2f} is above the "
+                f"${float(blocked.get('limit', 0)):.2f} standing limit, so this one needs a human.")
+    return "Payment: not made."
+
+
 def _chat(messages: list[dict[str, Any]]) -> dict[str, Any]:
     """One model turn, walking the provider chain on rate limits, outages and bad credentials.
 
@@ -79,7 +110,13 @@ def _chat(messages: list[dict[str, Any]]) -> dict[str, Any]:
                           {"status": r.status_code, "attempt": attempt + 1})
                 time.sleep(1.5 * (attempt + 1))
                 continue
-            r.raise_for_status()
+            if r.status_code >= 400:
+                # a hard error (bad key, unsupported tool schema, wrong model name) is not
+                # worth retrying on this provider - move to the next one instead
+                last_error = RuntimeError(f"{provider['name']} {r.status_code}: {r.text[:200]}")
+                store.log("agent.llm_provider_error", provider["name"],
+                          {"status": r.status_code, "detail": r.text[:160]})
+                break
             if provider["name"] != "primary":
                 store.log("agent.llm_provider_switch", provider["name"], provider["model"])
             return r.json()["choices"][0]["message"]
