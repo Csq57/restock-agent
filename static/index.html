@@ -88,6 +88,7 @@
         <span>Budget <b id="budgetOut">$0.00</b></span>
         <span id="headroom">-</span>
         <span style="flex:1"></span>
+        <button id="verifyBtn" disabled>Verify with PayPal</button>
         <button id="cancelBtn" disabled>Cancel</button>
         <button class="pay" id="approveBtn" disabled>Approve &amp; create PayPal order</button>
         <button class="pay" id="payBtn" disabled>Pay now</button>
@@ -196,6 +197,7 @@ function renderSummary() {
   document.getElementById("approveBtn").disabled = !draft || !["draft", "edited"].includes(status) || total <= 0 || room < 0;
   document.getElementById("payBtn").disabled = !draft || status !== "awaiting_capture";
   document.getElementById("cancelBtn").disabled = !draft || !["draft", "edited", "awaiting_capture"].includes(status);
+  document.getElementById("verifyBtn").disabled = !draft || !["awaiting_capture", "paid"].includes(status);
 }
 
 function renderSkipped() {
@@ -349,6 +351,17 @@ window.addEventListener("DOMContentLoaded", async () => {
       setStatus("captured " + (out.order.capture_id || "") + " - dedup=" + out.order.deduplicated +
         (out.order.deduplicated ? " (idempotency guard fired)" : ""));
       renderSummary(); await refreshEvents();
+    } catch (e) { setStatus(String(e), "over"); }
+  };
+
+  document.getElementById("verifyBtn").onclick = async () => {
+    if (!draft) return;
+    setStatus("Asking PayPal what actually happened...");
+    try {
+      const v = await api("/api/verify/" + draft.id);
+      setStatus("PayPal says: " + v.status + " - capture " + v.capture_id +
+        (v.match === undefined ? "" : v.match ? " (matches what this app recorded)" : " (MISMATCH)"),
+        v.status === "COMPLETED" ? "ok" : "warn");
     } catch (e) { setStatus(String(e), "over"); }
   };
 

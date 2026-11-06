@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from . import agent, catalog, planner, service, store, tools
 from .config import ROOT, settings
+from .paypal_client import get_client
 
 app = FastAPI(title="Restock Agent", version="0.1.0")
 app.mount("/static", StaticFiles(directory=str(ROOT / "static")), name="static")
@@ -163,6 +164,31 @@ def cancel(draft_id: str) -> dict[str, Any]:
     except service.GuardError as exc:
         raise HTTPException(status_code=409, detail={"code": exc.code, "message": exc.message,
                                                     **exc.detail}) from exc
+
+
+@app.get("/api/verify/{draft_id}")
+def verify(draft_id: str) -> dict[str, Any]:
+    """Ask PayPal what it thinks happened, instead of trusting our own database.
+
+    This is the endpoint the video uses to prove a payment: it goes straight to
+    GET /v2/checkout/orders/{id} and returns PayPal's own answer.
+    """
+    order = store.get_order(draft_id)
+    if not order or not order.get("paypal_order_id"):
+        raise HTTPException(status_code=404, detail={"code": "order_not_found"})
+    if not settings.has_paypal_creds:
+        return {"source": "mock", "order_id": order["paypal_order_id"],
+                "status": "CAPTURED" if order["status"] == "CAPTURED" else order["status"],
+                "capture_id": order.get("capture_id")}
+    try:
+        remote = get_client().get_order(order["paypal_order_id"])
+    except Exception as exc:  # noqa: BLE001 - surfaced to the caller, not swallowed
+        raise HTTPException(status_code=502, detail={"code": "paypal_error",
+                                                    "message": str(exc)}) from exc
+    return {"source": "paypal-api", "order_id": remote.get("id"),
+            "status": remote.get("status"), "capture_id": remote.get("capture_id"),
+            "local_status": order["status"], "local_capture_id": order.get("capture_id"),
+            "match": (remote.get("capture_id") or None) == order.get("capture_id")}
 
 
 @app.get("/api/events")
