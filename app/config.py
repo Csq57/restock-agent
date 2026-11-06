@@ -33,6 +33,11 @@ class Settings:
     llm_base_url: str = os.getenv("LLM_BASE_URL", "")
     llm_api_key: str = os.getenv("LLM_API_KEY", "")
     llm_model: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
+    # Optional second provider. Tried when the first one is rate limited or down, so a 20
+    # requests/day free tier cannot take the demo offline mid-recording.
+    llm2_base_url: str = os.getenv("LLM2_BASE_URL", "")
+    llm2_api_key: str = os.getenv("LLM2_API_KEY", "")
+    llm2_model: str = os.getenv("LLM2_MODEL", "")
     db_path: Path = ROOT / os.getenv("RESTOCK_DB", "data/restock.db")
     # Signs the approval token that binds a human review to one exact draft state.
     approval_secret: str = os.getenv("APPROVAL_SECRET", "")
@@ -44,6 +49,10 @@ class Settings:
     @property
     def has_llm(self) -> bool:
         return bool(self.llm_api_key and self.llm_base_url)
+
+    @property
+    def has_llm2(self) -> bool:
+        return bool(self.llm2_api_key and self.llm2_base_url and self.llm2_model)
 
 
 settings = Settings()

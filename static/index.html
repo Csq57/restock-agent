@@ -28,8 +28,13 @@
   button.pay { background:var(--ok); color:#fff; border-color:var(--ok); }
   button:disabled { opacity:.45; cursor:not-allowed; }
   #reply { margin:10px 0 0; padding:10px 12px; background:#f1f5f9; border-radius:8px; font-size:13px; max-height:170px; overflow:auto; }
-  .note { margin-top:6px; font-size:12px; color:#065f46; background:#ecfdf5; border:1px solid #a7f3d0; border-radius:8px; padding:6px 10px; }
+  .note { margin-top:6px; font-size:12px; color:#065f46; background:#ecfdf5; border:1px solid #a7f3d0; border-radius:8px; padding:6px 10px; display:flex; gap:10px; align-items:center; justify-content:space-between; }
   .note:empty { display:none; }
+  .note button { padding:4px 10px; font-size:12px; border-radius:6px; border:1px solid #10b981; background:#10b981; color:#fff; white-space:nowrap; }
+  .kpis { display:grid; grid-template-columns: repeat(3, 1fr); gap:10px; margin-top:12px; }
+  .kpi { border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:#fff; }
+  .kpi-label { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--muted); }
+  .kpi b { font-size:18px; font-variant-numeric: tabular-nums; }
   .trace { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; font-size:11px; color:var(--muted); }
   .trace code { background:#eef2ff; color:#3730a3; padding:2px 6px; border-radius:6px; }
   #grid { height:320px; width:100%; margin-top:12px; }
@@ -65,6 +70,12 @@
       <div id="reply">Press "Plan restock" and the agent reads the inventory CSV, quotes the catalog, and drafts a purchase order under your budget.</div>
       <div id="note" class="note"></div>
       <div class="trace" id="trace"></div>
+
+      <div class="kpis" id="kpis">
+        <div class="kpi"><span class="kpi-label">At risk of stocking out</span><b id="kpiRisk">-</b></div>
+        <div class="kpi"><span class="kpi-label">This order</span><b id="kpiOrder">-</b></div>
+        <div class="kpi"><span class="kpi-label">Demand not covered</span><b id="kpiUnmet">-</b></div>
+      </div>
 
       <div id="grid" class="ag-theme-quartz"></div>
 
@@ -140,6 +151,34 @@ function setStatus(text, cls) {
   el.className = "status " + (cls || "");
 }
 
+function setNote(note, unlock) {
+  const box = document.getElementById("note");
+  box.innerHTML = "";
+  if (!note) return;
+  const text = document.createElement("span");
+  text.textContent = note;
+  box.appendChild(text);
+  if (unlock && unlock.budget_after) {
+    const btn = document.createElement("button");
+    btn.textContent = "Try budget $" + Number(unlock.budget_after).toFixed(2);
+    btn.onclick = () => { box.innerHTML = ""; doReplan(Number(unlock.budget_after)); };
+    box.appendChild(btn);
+  }
+}
+
+function renderKPIs() {
+  const lines = (draft && draft.lines) || [];
+  const risky = lines.filter(l => Number(l.days_of_cover) <= 3).length;
+  const unmet = ((draft && draft.skipped) || [])
+    .filter(s => s.reason === "over_budget")
+    .reduce((sum, s) => sum + Number(s.min_cost || 0), 0);
+  document.getElementById("kpiRisk").textContent = draft ? risky + " SKU" + (risky === 1 ? "" : "s") : "-";
+  document.getElementById("kpiOrder").textContent = draft
+    ? "$" + Number(draft.total).toFixed(2) + " / $" + Number(draft.budget).toFixed(2) : "-";
+  document.getElementById("kpiUnmet").textContent = draft ? "$" + unmet.toFixed(2) : "-";
+  document.getElementById("kpiUnmet").className = unmet > 0 ? "over" : "";
+}
+
 function renderSummary() {
   const total = draft ? Number(draft.total) : 0;
   const budget = draft ? Number(draft.budget) : 0;
@@ -184,7 +223,7 @@ function loadDraft(d, trace) {
   syncing = true;
   gridApi.setGridOption("rowData", (d.lines || []).map(l => ({ ...l })));
   syncing = false;
-  renderSummary(); renderSkipped();
+  renderSummary(); renderSkipped(); renderKPIs();
   if (trace) renderTrace(trace);
 }
 
@@ -194,7 +233,7 @@ async function doPlan(budget, message) {
   try {
     const out = await api("/api/plan", "POST", { budget_usd: budget, message: message || "" });
     document.getElementById("reply").innerHTML = fmt(out.reply);
-    document.getElementById("note").textContent = out.note || "";
+    setNote(out.note, out.draft.next_unlock);
     loadDraft(out.draft, out.trace);
     setStatus("engine: " + out.engine + " - draft " + out.draft.id + " - nothing charged yet");
     await refreshEvents();
@@ -212,6 +251,8 @@ async function doReplan(budget) {
       : "No change needed at this budget.");
     document.getElementById("budget").value = budget;
     loadDraft(out.draft);
+    setNote("Budget raised to $" + Number(out.draft.budget).toFixed(2) +
+            " - the planner re-ran and the extra money bought what it quoted.", out.draft.next_unlock);
     setStatus("re-planned - total $" + Number(out.draft.total).toFixed(2) + " - nothing charged yet");
     await refreshEvents();
   } catch (e) { setStatus(String(e), "over"); }
@@ -229,8 +270,10 @@ window.addEventListener("DOMContentLoaded", async () => {
       try {
         const out = await api("/api/edit", "POST", { draft_id: draft.id, quantities });
         draft = out.draft;
-        renderSummary(); renderSkipped();
+        renderSummary(); renderSkipped(); renderKPIs();
         setStatus("quantities updated - total $" + Number(draft.total).toFixed(2));
+        setNote("Quantities edited: the approval token was re-issued for this exact total. "
+                + "Any token from before the edit no longer works.", draft.next_unlock);
       } catch (e) { setStatus(String(e), "over"); }
     }
   });

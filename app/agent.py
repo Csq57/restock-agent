@@ -6,6 +6,7 @@ tests and the demo never depend on a network model being reachable.
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 
 import requests
@@ -41,17 +42,48 @@ def _unlock_note(draft: dict[str, Any]) -> str | None:
             f"{unlock['adds_qty']} x {unlock['name']}{cover}. Re-planned and re-checked, not estimated.")
 
 
+def _providers() -> list[dict[str, str]]:
+    """Ordered model endpoints. A free tier with a 20/day cap must never be a single point of failure."""
+    chain = [{"base": settings.llm_base_url, "key": settings.llm_api_key,
+              "model": settings.llm_model, "name": "primary"}]
+    if settings.has_llm2:
+        chain.append({"base": settings.llm2_base_url, "key": settings.llm2_api_key,
+                      "model": settings.llm2_model, "name": "secondary"})
+    return chain
+
+
 def _chat(messages: list[dict[str, Any]]) -> dict[str, Any]:
-    r = requests.post(
-        f"{settings.llm_base_url.rstrip('/')}/chat/completions",
-        headers={"Authorization": f"Bearer {settings.llm_api_key}",
-                 "Content-Type": "application/json"},
-        json={"model": settings.llm_model, "messages": messages,
-              "tools": tools.TOOL_SCHEMAS, "tool_choice": "auto", "temperature": 0.0},
-        timeout=60,
-    )
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]
+    """One model turn, walking the provider chain on rate limits, outages and bad credentials.
+
+    The free tier of an OpenAI-compatible provider will happily return 429 while you are
+    demonstrating. Falling through to the next provider keeps the run on a real model instead
+    of quietly degrading to the deterministic planner in front of a judge.
+    """
+    last_error: Exception | None = None
+    for provider in _providers():
+        body = {"model": provider["model"], "messages": messages,
+                "tools": tools.TOOL_SCHEMAS, "tool_choice": "auto", "temperature": 0.0}
+        headers = {"Authorization": f"Bearer {provider['key']}",
+                   "Content-Type": "application/json"}
+        url = f"{provider['base'].rstrip('/')}/chat/completions"
+        for attempt in range(2):
+            try:
+                r = requests.post(url, headers=headers, json=body, timeout=60)
+            except requests.RequestException as exc:
+                last_error = exc
+                time.sleep(1.0)
+                continue
+            if r.status_code in (429, 500, 502, 503, 504):
+                last_error = RuntimeError(f"{provider['name']} {r.status_code}: {r.text[:160]}")
+                store.log("agent.llm_retry", provider["name"],
+                          {"status": r.status_code, "attempt": attempt + 1})
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            r.raise_for_status()
+            if provider["name"] != "primary":
+                store.log("agent.llm_provider_switch", provider["name"], provider["model"])
+            return r.json()["choices"][0]["message"]
+    raise RuntimeError(f"all providers failed: {last_error}")
 
 
 def _deterministic(plan_budget: float) -> tuple[str, list[dict[str, Any]], dict[str, Any]]:
