@@ -1,0 +1,172 @@
+# Restock Agent
+
+**An agentic replenishment buyer for small merchants.** It reads the shop's stock CSV, quotes the
+supplier catalog, drafts a purchase order that cannot exceed a hard budget, and — after a human
+approves it — pays the supplier through **PayPal Orders v2 in the sandbox**.
+
+Built for the [PayPal AI Hackathon](https://paypalaihackathon.devpost.com/) (Best Use of Agentic Commerce).
+
+![Planned draft](docs/screenshot-plan.png)
+
+---
+
+## Two payment modes (this is where PayPal's rules bite)
+
+PayPal will not let a merchant capture an order the payer never approved, so the integration
+supports both paths and picks one by env var:
+
+| `PAYPAL_PAYMENT_MODE` | What happens | When to use |
+|---|---|---|
+| `card` (default) | the agent holds a sandbox card on file, sends `payment_source.card` when creating the order, and PayPal settles inside that single call (`COMPLETED` + capture id) | autonomous agent checkout; headless demo; CI |
+| `approval` | the order is created without a payment source, the app surfaces the `checkoutnow?token=…` approval link, the payer approves in the PayPal sandbox, then `POST /api/capture` settles it | human-in-the-loop checkout, if a judge wants to click through PayPal |
+
+Evidence from a live sandbox run (`card` mode, verified back through `GET /v2/checkout/orders/{id}`):
+
+```
+order 6X147398UT547322A · capture 1546868974354614C · USD 1191.10 · 2026-11-06T10:43:17Z
+status COMPLETED / capture status COMPLETED
+```
+
+The first attempt without a payment source was refused with `422 UNPROCESSABLE_ENTITY /
+ORDER_NOT_APPROVED`, which is the documented behaviour and is what the `approval` mode is for.
+
+![Paid in the sandbox](docs/screenshot-live.png)
+
+---
+
+## The problem
+
+A café with ten SKUs and a weekly restock has to answer three questions that no spreadsheet answers
+well: *what will run out before the next delivery*, *what do I cut when the budget shrinks*, and
+*what did I actually pay for*. Today that is 40 minutes of arithmetic plus a manual checkout, and the
+arithmetic silently rots: one forgotten SKU means a stockout, one stale price means a wrong payment.
+
+Restock Agent turns that into one screen and one approval.
+
+## What it does
+
+1. **Read** — `read_inventory` loads `data/inventory.csv`: on-hand, daily sales, supplier lead time,
+   safety-stock days, MOQ.
+2. **Quote** — `quote_catalog` pulls live unit prices for the SKUs it is about to buy.
+3. **Draft** — `draft_purchase_order(budget)` computes a gap per SKU
+   (`daily_sales × (lead_time + safety_days) − on_hand`), sorts by days-of-cover, and allocates the
+   budget greedily. Anything that does not fit is reported with the exact shortfall — never dropped
+   silently.
+4. **Re-plan** — change the budget and the same tool runs again, returning a diff of what was
+   dropped, added or resized. This is the agent acting, not a suggestion engine.
+5. **Approve → pay** — a human reviews/edits quantities in the AG Grid table, then
+   `POST /api/approve` creates a PayPal order and `POST /api/capture` captures it. Money only moves
+   after the approval click.
+
+## Guardrails (the part judges should test)
+
+| Guard | Behaviour |
+|---|---|
+| Hard budget ceiling | `total ≤ budget` is enforced at draft time **and** re-checked at approve time, after any manual edit |
+| **The model cannot set its own budget** | `budget_usd` is not a tool parameter. The ceiling lives in server-side session state; if the model tries to send a budget anyway it is logged as `agent.budget_override_refused` and ignored. An assertion fails loudly if a draft ever carries a different ceiling |
+| **The model cannot pay** | `pay_purchase_order` is not in the tool schema the model sees, and the dispatcher raises `PermissionError` if it is called anyway. Money moves only from the human Approve click |
+| Catalog price drift | if the supplier price moved since the draft, the order is refused with a `price_drift` error and the draft must be re-planned |
+| Idempotency | `PayPal-Request-Id` on create, stable key on capture; a double click returns the first capture with `deduplicated: true` |
+| State machine | `draft → awaiting_capture → paid`, `→ cancelled`; illegal transitions raise `illegal_transition`, and a paid order can never be cancelled |
+| Empty / zero drafts | an empty order is refused |
+
+`tests/test_boundaries.py` covers all of them, offline, with no credentials (14 tests).
+
+## Architecture
+
+```
+browser (AG Grid, single screen)
+   │  fetch JSON
+   ▼
+FastAPI  app/main.py ── agent.plan() ──► LLM tool-calling loop (app/agent.py)
+   │                                        │ tools: read_inventory / quote_catalog
+   │                                        │        draft_purchase_order / pay_purchase_order
+   │                                        ▼
+   │                                   app/planner.py   (pure gap + allocation math)
+   │                                   app/catalog.py   (CSV + JSON loaders)
+   ├── app/service.py  ── guards ──► app/paypal_client.py ──► api-m.sandbox.paypal.com
+   └── app/store.py    (SQLite: drafts, orders, append-only audit log)
+```
+
+Two design choices worth naming:
+
+- **The math is deterministic and separate from the model.** The LLM chooses *which* tools to call and
+  *how to explain* the result; it never computes a dollar amount. Every number in the UI is
+  re-derivable from `planner.py`, so the audit trail is trustworthy.
+- **A mock PayPal client ships in the box.** Without credentials the app runs end-to-end against
+  `MockPayPal`, which keeps tests and demos reproducible and offline.
+
+## Run it
+
+```bash
+python -m venv .venv && .venv\Scripts\activate     # Windows
+pip install -r requirements.txt
+copy .env.example .env                              # then fill in the values
+python -m uvicorn app.main:app --host 127.0.0.1 --port 8756
+```
+
+Open <http://127.0.0.1:8756/>.
+
+Sandbox credentials come from <https://developer.paypal.com/dashboard/applications/sandbox>
+(App → Client ID / Secret). With them present the header badge reads `paypal: sandbox-live` and the
+approve step returns a real `sandbox.paypal.com/checkoutnow?token=…` link; without them it reads
+`paypal: mock`.
+
+Verify credentials alone:
+
+```bash
+python -m scripts.smoke --token-check
+```
+
+Full local run (plan → approve → capture) with an audit trail dump:
+
+```bash
+python -m scripts.smoke --budget 1200
+python -m unittest discover -s tests -v
+```
+
+### Environment
+
+| Variable | Purpose |
+|---|---|
+| `PAYPAL_CLIENT_ID` / `PAYPAL_CLIENT_SECRET` | sandbox app credentials (never commit) |
+| `PAYPAL_BASE_URL` | defaults to `https://api-m.sandbox.paypal.com` |
+| `PAYPAL_CURRENCY` | defaults to `USD` |
+| `PAYPAL_PAYMENT_MODE` | `card` (default) or `approval` — see above |
+| `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | any OpenAI-compatible endpoint; blank ⇒ deterministic planner |
+| `RESTOCK_DB` | SQLite path, defaults to `data/restock.db` |
+
+## Tools used
+
+| Tool | How it is used |
+|---|---|
+| **PayPal Orders v2 REST API** (sandbox) | `POST /v2/checkout/orders` to create, `POST /v2/checkout/orders/{id}/capture` to capture; `POST /v1/oauth2/token` with automatic token refresh (sandbox tokens live 3–8 h) |
+| **Google Gemini 2.5 Flash** via its OpenAI-compatible endpoint | function calling decides which tools to call, in what order, and how to explain cuts after a budget change. Any OpenAI-compatible provider works; the model name is shown in the header badge. If the provider is unreachable the run is labelled `llm-fallback` and the deterministic planner finishes the job, so the demo never dies on stage |
+| **AG Grid Community** (MIT) | the single-screen review table: editable quantities, live line totals, budget headroom |
+| **FastAPI + SQLite** | HTTP surface, SQLite for drafts/orders plus an append-only event log |
+
+No PayPal credentials, tokens or account data are written to the repository; `.env` is gitignored
+and `.env.example` carries only empty keys.
+
+## Demo script (2:40, matches the video)
+
+| Time | Beat |
+|---|---|
+| 0:00–0:20 | The shop, the CSV, the question: "what runs out before Thursday?" |
+| 0:20–0:55 | Plan at $1200 → four lines, six SKUs left out with reasons |
+| 0:55–1:25 | Cut to $600 → diff shows `SKU-1001 dropped`, `SKU-1008 28 → 16` |
+| 1:25–1:55 | Edit a quantity in the grid → total and headroom recompute |
+| 1:55–2:20 | Approve → PayPal order + real sandbox approval link → pay → capture id |
+| 2:20–2:40 | Click pay twice: `deduplicated: true`. Raise the price in the catalog: `price_drift`. Audit log. |
+
+## Limitations
+
+- One merchant, one currency (USD), one supplier catalog — deliberate scope for a 6-day build.
+- The catalog is a local JSON file standing in for a supplier API; the sandbox products are not
+  provisioned through PayPal Catalog yet.
+- Capture is server-side (merchant-initiated) rather than a buyer-approved redirect; the approval URL
+  is surfaced in the UI for transparency but the demo uses the direct capture path.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

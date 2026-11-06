@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Restock Agent - PayPal sandbox</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>R</text></svg>" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.4/styles/ag-grid.css" />
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.4/styles/ag-theme-quartz.css" />
+<script src="https://cdn.jsdelivr.net/npm/ag-grid-community@31.3.4/dist/ag-grid-community.min.js"></script>
+<style>
+  :root { --ink:#0f172a; --muted:#64748b; --line:#e2e8f0; --accent:#0070e0; --ok:#0f9d58; --bad:#b91c1c; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; color:var(--ink); background:#f8fafc; }
+  header { display:flex; align-items:center; gap:12px; padding:14px 20px; background:#fff; border-bottom:1px solid var(--line); }
+  h1 { font-size:16px; margin:0; letter-spacing:-.01em; }
+  .badge { font-size:11px; padding:2px 8px; border-radius:999px; border:1px solid var(--line); color:var(--muted); background:#f1f5f9; }
+  .badge.live { color:#065f46; background:#d1fae5; border-color:#a7f3d0; }
+  .badge.mock { color:#92400e; background:#fef3c7; border-color:#fde68a; }
+  main { display:grid; grid-template-columns: minmax(0,1fr) 340px; gap:16px; padding:16px 20px 40px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:10px; padding:14px; }
+  .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  input[type=number], input[type=text] { padding:8px 10px; border:1px solid var(--line); border-radius:8px; font:inherit; }
+  input[type=number] { width:110px; }
+  input[type=text] { flex:1; min-width:180px; }
+  button { padding:8px 14px; border-radius:8px; border:1px solid var(--line); background:#fff; font:inherit; cursor:pointer; }
+  button.primary { background:var(--accent); color:#fff; border-color:var(--accent); }
+  button.pay { background:var(--ok); color:#fff; border-color:var(--ok); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  #reply { margin:10px 0 0; padding:10px 12px; background:#f1f5f9; border-radius:8px; font-size:13px; max-height:170px; overflow:auto; }
+  .trace { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; font-size:11px; color:var(--muted); }
+  .trace code { background:#eef2ff; color:#3730a3; padding:2px 6px; border-radius:6px; }
+  #grid { height:320px; width:100%; margin-top:12px; }
+  .summary { display:flex; gap:18px; align-items:baseline; margin-top:12px; font-variant-numeric: tabular-nums; }
+  .summary b { font-size:20px; }
+  .over { color:var(--bad); font-weight:600; }
+  h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 8px; }
+  #skipped, #events { font-size:12px; color:var(--muted); max-height:300px; overflow:auto; }
+  #skipped div, #events div { padding:4px 0; border-bottom:1px dashed var(--line); }
+  .link { color:var(--accent); word-break:break-all; font-size:12px; }
+  .status { font-size:12px; color:var(--muted); margin-top:6px; }
+  @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Restock Agent</h1>
+  <span class="badge" id="modePaypal">paypal: ...</span>
+  <span class="badge" id="modeLlm">ai: ...</span>
+  <span class="badge" id="modeDeadline">devpost closes 13 Nov 07:00 AEST</span>
+</header>
+
+<main>
+  <section>
+    <div class="card">
+      <div class="row">
+        <label>Budget (USD)</label>
+        <input type="number" id="budget" value="1200" min="1" step="50" />
+        <button class="primary" id="planBtn">Plan restock</button>
+        <button id="cutBtn">Re-plan at $600</button>
+        <input type="text" id="message" placeholder="Optional instruction, e.g. skip SKU-1009, cups are fine" />
+      </div>
+      <div id="reply">Press "Plan restock" and the agent reads the inventory CSV, quotes the catalog, and drafts a purchase order under your budget.</div>
+      <div class="trace" id="trace"></div>
+
+      <div id="grid" class="ag-theme-quartz"></div>
+
+      <div class="summary">
+        <span>Order total <b id="total">$0.00</b></span>
+        <span>Budget <b id="budgetOut">$0.00</b></span>
+        <span id="headroom">-</span>
+        <span style="flex:1"></span>
+        <button id="cancelBtn" disabled>Cancel</button>
+        <button class="pay" id="approveBtn" disabled>Approve &amp; create PayPal order</button>
+        <button class="pay" id="payBtn" disabled>Pay now</button>
+      </div>
+      <div class="status" id="status"></div>
+      <div id="approveUrl" class="link"></div>
+    </div>
+  </section>
+
+  <aside>
+    <div class="card" style="margin-bottom:16px">
+      <h2>Left out, and why</h2>
+      <div id="skipped">No draft yet.</div>
+    </div>
+    <div class="card">
+      <h2>Audit trail</h2>
+      <div id="events">No events yet.</div>
+    </div>
+  </aside>
+</main>
+
+<script>
+const COLUMNS = [
+  { field: "sku", headerName: "SKU", width: 108, minWidth: 108 },
+  { field: "name", headerName: "Item", flex: 1, minWidth: 150 },
+  { field: "days_of_cover", headerName: "Days", headerTooltip: "Days of cover at current sales rate",
+    width: 78, type: "numericColumn", cellClass: p => p.value <= 3 ? "over" : "" },
+  { field: "gap_qty", headerName: "Gap", width: 70, type: "numericColumn" },
+  { field: "unit_price", headerName: "Unit $", width: 84, type: "numericColumn",
+    valueFormatter: p => "$" + Number(p.value).toFixed(2) },
+  { field: "qty", headerName: "Qty", width: 76, editable: true, type: "numericColumn",
+    cellEditor: "agNumberCellEditor", cellEditorParams: { min: 0, precision: 0 } },
+  { headerName: "Line $", width: 96, type: "numericColumn",
+    valueGetter: p => p.data ? Number(p.data.qty) * Number(p.data.unit_price) : 0,
+    valueFormatter: p => "$" + Number(p.value).toFixed(2) },
+  { field: "reason", headerName: "Why", width: 112,
+    valueFormatter: p => p.value === "urgent_restock" ? "urgent" : "top-up" }
+];
+
+let draft = null;
+let gridApi = null;
+let syncing = false;
+
+const api = async (path, method = "GET", body) => {
+  const res = await fetch(path, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error((data.detail && data.detail.code) + ": " + ((data.detail && data.detail.message) || res.status));
+  return data;
+};
+
+function fmt(text) {
+  const esc = String(text).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  return esc.replace(/\*\*(.+?)\*\*/g, "<b>$1</b>")
+            .replace(/\n{2,}/g, "<br><br>")
+            .replace(/\n/g, "<br>");
+}
+
+function setStatus(text, cls) {
+  const el = document.getElementById("status");
+  el.textContent = text || "";
+  el.className = "status " + (cls || "");
+}
+
+function renderSummary() {
+  const total = draft ? Number(draft.total) : 0;
+  const budget = draft ? Number(draft.budget) : 0;
+  document.getElementById("total").textContent = "$" + total.toFixed(2);
+  document.getElementById("budgetOut").textContent = "$" + budget.toFixed(2);
+  const head = document.getElementById("headroom");
+  const room = budget - total;
+  head.textContent = room < 0 ? "over budget by $" + Math.abs(room).toFixed(2) : "$" + room.toFixed(2) + " headroom";
+  head.className = room < 0 ? "over" : "";
+  const status = draft ? draft.status : null;
+  document.getElementById("approveBtn").disabled = !draft || !["draft", "edited"].includes(status) || total <= 0 || room < 0;
+  document.getElementById("payBtn").disabled = !draft || status !== "awaiting_capture";
+  document.getElementById("cancelBtn").disabled = !draft || !["draft", "edited", "awaiting_capture"].includes(status);
+}
+
+function renderSkipped() {
+  const box = document.getElementById("skipped");
+  if (!draft || !draft.skipped || !draft.skipped.length) { box.textContent = "Nothing dropped."; return; }
+  box.innerHTML = draft.skipped.map(s =>
+    "<div><b>" + s.sku + "</b> " + s.name + "<br/><span style=\"color:#94a3b8\">" + s.reason.replace(/_/g, " ") + "</span>" +
+    (s.wanted_cost ? " - wanted $" + Number(s.wanted_cost).toFixed(2) + ", room $" + Number(s.room_left).toFixed(2) : "") +
+    "</div>").join("");
+}
+
+function renderTrace(trace) {
+  document.getElementById("trace").innerHTML = (trace || []).map(t => "<code>" + t.tool + "()</code>").join("");
+}
+
+async function refreshEvents() {
+  const { events } = await api("/api/events?limit=40");
+  document.getElementById("events").innerHTML = events.map(e =>
+    "<div><b>" + e.kind + "</b> <span style=\"color:#94a3b8\">" + (e.ref || "") + "</span><br/>" +
+    String(e.detail).slice(0, 120) + "</div>").join("");
+}
+
+function loadDraft(d, trace) {
+  draft = d;
+  syncing = true;
+  gridApi.setGridOption("rowData", (d.lines || []).map(l => ({ ...l })));
+  syncing = false;
+  renderSummary(); renderSkipped();
+  if (trace) renderTrace(trace);
+}
+
+async function doPlan(budget, message) {
+  setStatus("Agent is working...");
+  document.getElementById("approveUrl").textContent = "";
+  try {
+    const out = await api("/api/plan", "POST", { budget_usd: budget, message: message || "" });
+    document.getElementById("reply").innerHTML = fmt(out.reply);
+    loadDraft(out.draft, out.trace);
+    setStatus("engine: " + out.engine + " - draft " + out.draft.id + " - nothing charged yet");
+    await refreshEvents();
+  } catch (e) { setStatus(String(e), "over"); }
+}
+
+async function doReplan(budget) {
+  setStatus("Re-planning under the new budget...");
+  try {
+    const out = await api("/api/replan", "POST", { draft_id: draft && draft.id, budget_usd: budget, exclude_skus: [] });
+    const diff = out.draft.diff || [];
+    document.getElementById("reply").innerHTML = fmt(diff.length
+      ? "Re-planned to $" + Number(out.draft.budget).toFixed(2) + ": " +
+        diff.map(c => c.sku + " " + c.change + " (" + c.from + " to " + c.to + ")").join(", ")
+      : "No change needed at this budget.");
+    document.getElementById("budget").value = budget;
+    loadDraft(out.draft);
+    setStatus("re-planned - total $" + Number(out.draft.total).toFixed(2) + " - nothing charged yet");
+    await refreshEvents();
+  } catch (e) { setStatus(String(e), "over"); }
+}
+
+window.addEventListener("DOMContentLoaded", async () => {
+  gridApi = agGrid.createGrid(document.getElementById("grid"), {
+    columnDefs: COLUMNS,
+    rowData: [],
+    defaultColDef: { sortable: true, resizable: true },
+    onCellValueChanged: async () => {
+      if (syncing || !draft) return;
+      const quantities = {};
+      gridApi.forEachNode(n => { quantities[n.data.sku] = Number(n.data.qty) || 0; });
+      try {
+        const out = await api("/api/edit", "POST", { draft_id: draft.id, quantities });
+        draft = out.draft;
+        renderSummary(); renderSkipped();
+        setStatus("quantities updated - total $" + Number(draft.total).toFixed(2));
+      } catch (e) { setStatus(String(e), "over"); }
+    }
+  });
+
+  try {
+    const h = await api("/api/health");
+    const p = document.getElementById("modePaypal");
+    p.textContent = "paypal: " + h.paypal_mode;
+    p.className = "badge " + (h.paypal_mode === "sandbox-live" ? "live" : "mock");
+    const l = document.getElementById("modeLlm");
+    l.textContent = "ai: " + (h.llm_mode === "llm" ? h.llm_model : "deterministic planner");
+    l.className = "badge " + (h.llm_mode === "llm" ? "live" : "mock");
+  } catch (e) { /* badges are cosmetic */ }
+
+  document.getElementById("planBtn").onclick = () =>
+    doPlan(Number(document.getElementById("budget").value), document.getElementById("message").value);
+  document.getElementById("cutBtn").onclick = () => doReplan(600);
+
+  document.getElementById("approveBtn").onclick = async () => {
+    setStatus("Creating the PayPal order...");
+    try {
+      const quantities = {};
+      gridApi.forEachNode(n => { quantities[n.data.sku] = Number(n.data.qty) || 0; });
+      const edited = await api("/api/edit", "POST", { draft_id: draft.id, quantities });
+      draft = edited.draft;
+      const out = await api("/api/approve/" + draft.id, "POST", { approval_token: draft.approval_token });
+      draft = out.draft;
+      document.getElementById("approveUrl").innerHTML = out.order.approve_url
+        ? "PayPal approval link: <a href=\"" + out.order.approve_url + "\" target=\"_blank\" rel=\"noopener\">" + out.order.approve_url + "</a>"
+        : "";
+      setStatus(out.order.settled
+        ? "paid in PayPal sandbox - order " + out.order.paypal_order_id + " - capture " + out.order.capture_id + " - " + Number(out.order.amount).toFixed(2) + " " + out.order.currency
+        : "order " + out.order.paypal_order_id + " created (" + out.mode + ") - " + Number(out.order.amount).toFixed(2) + " " + out.order.currency + " - awaiting payer approval");
+      renderSummary(); await refreshEvents();
+    } catch (e) { setStatus(String(e), "over"); }
+  };
+
+  document.getElementById("payBtn").onclick = async () => {
+    setStatus("Capturing...");
+    try {
+      const out = await api("/api/capture/" + draft.id, "POST");
+      draft = out.draft;
+      setStatus("captured " + (out.order.capture_id || "") + " - dedup=" + out.order.deduplicated +
+        (out.order.deduplicated ? " (idempotency guard fired)" : ""));
+      renderSummary(); await refreshEvents();
+    } catch (e) { setStatus(String(e), "over"); }
+  };
+
+  document.getElementById("cancelBtn").onclick = async () => {
+    try {
+      await api("/api/cancel/" + draft.id, "POST");
+      setStatus("cancelled before capture - no money moved");
+      await refreshEvents();
+    } catch (e) { setStatus(String(e), "over"); }
+  };
+
+  await refreshEvents();
+});
+</script>
+</body>
+</html>

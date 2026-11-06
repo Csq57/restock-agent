@@ -1,0 +1,16 @@
+{
+  "currency": "USD",
+  "supplier": "Northline Supply Co.",
+  "items": [
+    { "sku": "SKU-1001", "name": "Espresso Beans 1kg", "unit_price": 19.80 },
+    { "sku": "SKU-1002", "name": "Oat Milk 1L (12-pack)", "unit_price": 36.50 },
+    { "sku": "SKU-1003", "name": "Paper Cups 8oz (1000)", "unit_price": 52.00 },
+    { "sku": "SKU-1004", "name": "Lids 8oz (1000)", "unit_price": 21.25 },
+    { "sku": "SKU-1005", "name": "Matcha Powder 500g", "unit_price": 30.10 },
+    { "sku": "SKU-1006", "name": "Vanilla Syrup 750ml", "unit_price": 9.15 },
+    { "sku": "SKU-1007", "name": "Caramel Syrup 750ml", "unit_price": 9.15 },
+    { "sku": "SKU-1008", "name": "Cold Brew Concentrate 1L", "unit_price": 17.40 },
+    { "sku": "SKU-1009", "name": "Reusable Cup 12oz", "unit_price": 12.00 },
+    { "sku": "SKU-1010", "name": "Napkins 500ct", "unit_price": 6.90 }
+  ]
+}
