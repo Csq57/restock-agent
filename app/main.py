@@ -62,7 +62,8 @@ def health() -> dict[str, Any]:
         "ok": True,
         "paypal_mode": "sandbox-live" if settings.has_paypal_creds else "mock",
         "llm_mode": "llm" if settings.has_llm else "deterministic",
-        "llm_chain": [settings.llm_model] + ([settings.llm2_model] if settings.has_llm2 else []),
+        "llm_chain": ([settings.llm_model] + ([settings.llm2_model] if settings.has_llm2 else []))
+        if settings.has_llm else [],
         "currency": settings.currency,
         "llm_model": settings.llm_model if settings.has_llm else None,
         "tools": [t["function"]["name"] for t in agent.tools.TOOL_SCHEMAS]
