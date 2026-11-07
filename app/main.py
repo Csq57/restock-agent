@@ -37,9 +37,12 @@ class ApprovalIn(BaseModel):
 
 
 class RunIn(BaseModel):
-    """One autonomous restock run: plan, then pay if the result is inside the standing policy."""
+    """One autonomous restock run: plan, then pay if the result is inside the standing policy.
+
+    The limit is deliberately not a request field - it is server configuration
+    (`AUTOPAY_LIMIT_USD`), so a caller cannot raise the merchant's ceiling by asking.
+    """
     budget_usd: float = Field(gt=0, le=100_000)
-    autopay_limit_usd: float = Field(ge=0, le=100_000)
     message: str = ""
 
 
@@ -66,6 +69,7 @@ def health() -> dict[str, Any]:
         "llm_chain": ([settings.llm_model] + ([settings.llm2_model] if settings.has_llm2 else []))
         if settings.has_llm else [],
         "currency": settings.currency,
+        "autopay_limit": settings.autopay_limit,
         "llm_model": settings.llm_model if settings.has_llm else None,
         "tools": [t["function"]["name"] for t in agent.tools.TOOL_SCHEMAS]
         if hasattr(agent, "tools") else [],
@@ -119,11 +123,11 @@ def run(body: RunIn) -> dict[str, Any]:
     """
     out = agent.plan(body.budget_usd, body.message)
     out["reply"] = agent.strip_payment_claims(out["reply"])
+    limit = settings.autopay_limit
     draft = out["draft"]
     out["draft"] = _reviewable(draft)
     try:
-        order = service.create_order(draft["id"],
-                                     policy={"autopay_limit": body.autopay_limit_usd})
+        order = service.create_order(draft["id"], policy={"autopay_limit": limit})
         out["reply"] += "\n\n" + agent.settlement_line(order, "auto_paid")
         return {**out, "decision": "auto_paid", "order": order,
                 "draft": _reviewable(store.get_draft(draft["id"]) or {})}

@@ -237,6 +237,30 @@ class GuardTests(unittest.TestCase):
         ok = service.create_order(d["id"], policy={"autopay_limit": d["total"]})
         self.assertTrue(ok["settled"])
 
+    def test_limit_is_not_a_request_field(self):
+        from app.main import RunIn
+        self.assertNotIn("autopay_limit_usd", RunIn.model_fields,
+                         "the standing limit must come from server config, not the request body")
+
+    def test_limit_is_rechecked_after_the_draft_is_claimed(self):
+        """The limit has to hold for the version that gets paid, not the one we read first."""
+        d = self._draft(300)
+        real_claim = store.claim_for_payment
+
+        def stale_claim(draft_id):
+            claimed = real_claim(draft_id)
+            return {**claimed, "total": claimed["total"] + 10_000} if claimed else None
+
+        store.claim_for_payment = stale_claim  # type: ignore[assignment]
+        try:
+            with self.assertRaises(service.GuardError) as ctx:
+                service.create_order(d["id"], policy={"autopay_limit": 400})
+            self.assertEqual(ctx.exception.code, "over_policy_limit")
+        finally:
+            store.claim_for_payment = real_claim  # type: ignore[assignment]
+        self.assertFalse(self.mock.calls, "an over-limit draft must never reach PayPal")
+        self.assertEqual(store.get_draft(d["id"])["status"], "draft", "the claim must be released")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

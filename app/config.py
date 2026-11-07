@@ -39,6 +39,9 @@ class Settings:
     llm2_api_key: str = os.getenv("LLM2_API_KEY", "")
     llm2_model: str = os.getenv("LLM2_MODEL", "")
     db_path: Path = ROOT / os.getenv("RESTOCK_DB", "data/restock.db")
+    # The merchant's standing spend limit. It lives here, on the server, not in the request:
+    # a caller cannot raise it by asking the API nicely.
+    autopay_limit: float = float(os.getenv("AUTOPAY_LIMIT_USD", "0") or 0)
     # Signs the approval token that binds a human review to one exact draft state.
     approval_secret: str = os.getenv("APPROVAL_SECRET", "")
 

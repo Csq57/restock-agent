@@ -115,6 +115,7 @@ def create_order(draft_id: str, token: str | None = None,
                          {"status": current["status"]})
 
     authorised_by = "human_token"
+    limit: float | None = None
     if policy and policy.get("autopay_limit") is not None:
         limit = float(policy["autopay_limit"])
         if current["total"] > limit + EPS:
@@ -140,7 +141,17 @@ def create_order(draft_id: str, token: str | None = None,
                          "another approval already claimed this draft",
                          {"draft_id": draft_id})
 
-    _preflight(draft)  # re-check the state we actually claimed
+    # Re-check against the state we actually claimed: the limit has to hold for the version of
+    # the draft that is about to be paid, not for the one we read a moment ago.
+    if limit is not None and draft["total"] > limit + EPS:
+        store.set_draft_status(draft_id, "draft")  # release the claim, nothing charged
+        store.log("guard.policy_refused_after_claim", draft_id,
+                  {"total": draft["total"], "limit": limit})
+        raise GuardError("over_policy_limit",
+                         f"draft total {draft['total']:.2f} exceeds the standing limit "
+                         f"{limit:.2f} after claiming; refused",
+                         {"total": draft["total"], "limit": limit})
+    _preflight(draft)
 
     client = get_client()
     source = {"card": TEST_CARD} if PAY_MODE == "card" else None

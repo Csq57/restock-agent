@@ -46,6 +46,7 @@
   #skipped div, #events div { padding:4px 0; border-bottom:1px dashed var(--line); }
   .link { color:var(--accent); word-break:break-all; font-size:12px; }
   .status { font-size:12px; color:var(--muted); margin-top:6px; }
+  .limit { padding:8px 10px; border:1px dashed #cbd5e1; border-radius:8px; font-variant-numeric: tabular-nums; color:#334155; }
   .status.ok { color:#065f46; font-weight:600; }
   .status.warn { color:#b45309; font-weight:600; }
   @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
@@ -66,7 +67,7 @@
         <label>Budget (USD)</label>
         <input type="number" id="budget" value="600" min="1" step="50" />
         <label>Auto-pay up to</label>
-        <input type="number" id="autopay" value="700" min="0" step="50" />
+        <span id="autopayLimit" class="limit">$0.00 (server)</span>
         <button class="primary" id="runBtn">Run restock</button>
         <button id="planBtn">Plan only</button>
         <input type="text" id="message" placeholder="Optional instruction, e.g. skip SKU-1009, cups are fine" />
@@ -129,6 +130,7 @@ const COLUMNS = [
 ];
 
 let draft = null;
+let serverLimit = 0;
 let gridApi = null;
 let syncing = false;
 
@@ -246,18 +248,18 @@ async function doPlan(budget, message) {
   } catch (e) { setStatus(String(e), "over"); }
 }
 
-async function doRun(budget, autopay, message) {
+async function doRun(budget, message) {
   setStatus("Agent is planning and paying inside your limit...");
   document.getElementById("approveUrl").textContent = "";
   try {
     const out = await api("/api/run", "POST",
-      { budget_usd: budget, autopay_limit_usd: autopay, message: message || "" });
+      { budget_usd: budget, message: message || "" });
     document.getElementById("reply").innerHTML = fmt(out.reply);
     setNote(out.note, out.draft.next_unlock);
     loadDraft(out.draft, out.trace);
     if (out.decision === "auto_paid") {
-      setStatus("PAID AUTOMATICALLY inside your $" + Number(autopay).toFixed(2) +
-        " limit · order " + out.order.paypal_order_id + " · capture " + out.order.capture_id +
+      setStatus("PAID AUTOMATICALLY inside the server limit of $" + Number(serverLimit).toFixed(2) +
+        " · order " + out.order.paypal_order_id + " · capture " + out.order.capture_id +
         " · " + Number(out.order.amount).toFixed(2) + " " + out.order.currency, "ok");
     } else {
       setStatus("STOPPED: $" + Number(out.blocked.total).toFixed(2) + " is above your $" +
@@ -315,13 +317,14 @@ window.addEventListener("DOMContentLoaded", async () => {
       ? h.llm_chain.join(" > ")
       : "deterministic planner");
     l.className = "badge " + (h.llm_mode === "llm" ? "live" : "mock");
+    serverLimit = Number(h.autopay_limit || 0);
+    document.getElementById("autopayLimit").textContent = "$" + serverLimit.toFixed(2) + " (server)";
   } catch (e) { /* badges are cosmetic */ }
 
   document.getElementById("planBtn").onclick = () =>
     doPlan(Number(document.getElementById("budget").value), document.getElementById("message").value);
   document.getElementById("runBtn").onclick = () =>
     doRun(Number(document.getElementById("budget").value),
-          Number(document.getElementById("autopay").value),
           document.getElementById("message").value);
 
   document.getElementById("approveBtn").onclick = async () => {
