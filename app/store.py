@@ -38,6 +38,10 @@ CREATE TABLE IF NOT EXISTS events (
     ref    TEXT,
     detail TEXT
 );
+CREATE TABLE IF NOT EXISTS policy (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 
@@ -152,6 +156,19 @@ def events(limit: int = 200) -> list[dict[str, Any]]:
     with conn() as c:
         rows = c.execute("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_policy(key: str) -> str | None:
+    with conn() as c:
+        row = c.execute("SELECT value FROM policy WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else None
+
+
+def set_policy(key: str, value: str) -> None:
+    with conn() as c:
+        c.execute("INSERT INTO policy(key, value) VALUES(?,?) "
+                  "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, value))
+    log("policy.updated", key, {"value": value})
 
 
 def reset() -> None:

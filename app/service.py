@@ -46,6 +46,31 @@ class GuardError(RuntimeError):
         self.detail = detail or {}
 
 
+POLICY_KEY = "autopay_limit"
+
+
+def standing_limit() -> float:
+    """The merchant's standing spend limit, as stored on the server.
+
+    The UI writes it through one endpoint; nothing about a payment request can raise it.
+    Falls back to the environment value so a fresh clone still behaves predictably.
+    """
+    stored = store.get_policy(POLICY_KEY)
+    if stored is not None:
+        try:
+            return float(stored)
+        except ValueError:
+            pass
+    return float(settings.autopay_limit)
+
+
+def set_standing_limit(value: float) -> float:
+    if value < 0:
+        raise GuardError("invalid_limit", "the standing limit cannot be negative")
+    store.set_policy(POLICY_KEY, f"{float(value):.2f}")
+    return standing_limit()
+
+
 # ---------------------------------------------------------------- approval token
 def approval_token(draft: dict[str, Any]) -> str:
     """Signs the exact reviewed state: draft id, total, and line count.

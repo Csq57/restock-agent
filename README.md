@@ -171,7 +171,7 @@ python -m scripts.audit_evidence        # asks PayPal about every recorded payme
 | `PAYPAL_BASE_URL` | defaults to `https://api-m.sandbox.paypal.com` |
 | `PAYPAL_CURRENCY` | defaults to `USD` |
 | `PAYPAL_PAYMENT_MODE` | `card` (default) or `approval` |
-| `AUTOPAY_LIMIT_USD` | the merchant's standing spend limit. Server-side on purpose; not accepted from a request |
+| `AUTOPAY_LIMIT_USD` | default for the merchant's standing spend limit. The value the app actually honours is stored on the server (`POST /api/policy`, written by the UI once) and this env var is only the fallback. It is never accepted from a payment request |
 | `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` | any OpenAI-compatible endpoint; blank means the deterministic planner |
 | `LLM2_*` | optional second provider, used when the first is rate limited or down |
 | `RESTOCK_DB` | SQLite path, defaults to `data/restock.db` |

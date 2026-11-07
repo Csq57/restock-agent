@@ -67,7 +67,7 @@
         <label>Budget (USD)</label>
         <input type="number" id="budget" value="600" min="1" step="50" />
         <label>Auto-pay up to</label>
-        <span id="autopayLimit" class="limit">$0.00 (server)</span>
+        <input type="number" id="autopay" value="700" min="0" step="50" title="Standing limit, stored on the server" />
         <button class="primary" id="runBtn">Run restock</button>
         <button id="planBtn">Plan only</button>
         <input type="text" id="message" placeholder="Optional instruction, e.g. skip SKU-1009, cups are fine" />
@@ -318,11 +318,21 @@ window.addEventListener("DOMContentLoaded", async () => {
       : "deterministic planner");
     l.className = "badge " + (h.llm_mode === "llm" ? "live" : "mock");
     serverLimit = Number(h.autopay_limit || 0);
-    document.getElementById("autopayLimit").textContent = "$" + serverLimit.toFixed(2) + " (server)";
+    document.getElementById("autopay").value = serverLimit;
   } catch (e) { /* badges are cosmetic */ }
 
   document.getElementById("planBtn").onclick = () =>
     doPlan(Number(document.getElementById("budget").value), document.getElementById("message").value);
+  document.getElementById("autopay").onchange = async (ev) => {
+    // persists to the server: the limit is stored there, not sent with the payment request
+    try {
+      const out = await api("/api/policy", "POST", { autopay_limit: Number(ev.target.value) });
+      serverLimit = Number(out.autopay_limit);
+      ev.target.value = serverLimit;
+      setStatus("standing limit is now $" + serverLimit.toFixed(2) + " (stored on the server)");
+    } catch (e) { setStatus(String(e), "over"); }
+  };
+
   document.getElementById("runBtn").onclick = () =>
     doRun(Number(document.getElementById("budget").value),
           document.getElementById("message").value);

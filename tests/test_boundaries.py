@@ -1,4 +1,4 @@
-"""Boundary tests for every guard the judge can poke at.
+﻿"""Boundary tests for every guard the judge can poke at.
 
 Run: python -m unittest discover -s tests -v
 No network, no credentials: PayPal is swapped for the in-process mock.
@@ -237,6 +237,15 @@ class GuardTests(unittest.TestCase):
         ok = service.create_order(d["id"], policy={"autopay_limit": d["total"]})
         self.assertTrue(ok["settled"])
 
+    def test_standing_limit_is_stored_on_the_server(self):
+        service.set_standing_limit(123.45)
+        self.assertAlmostEqual(service.standing_limit(), 123.45, places=2)
+        d = self._draft(300)          # total 295.75
+        with self.assertRaises(service.GuardError) as ctx:
+            service.create_order(d["id"], policy={"autopay_limit": service.standing_limit()})
+        self.assertEqual(ctx.exception.code, "over_policy_limit")
+        service.set_standing_limit(400)
+        self.assertTrue(service.create_order(d["id"], policy={"autopay_limit": service.standing_limit()})["settled"])
     def test_limit_is_not_a_request_field(self):
         from app.main import RunIn
         self.assertNotIn("autopay_limit_usd", RunIn.model_fields,
