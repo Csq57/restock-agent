@@ -1,12 +1,25 @@
 # Restock Agent
 
-**An agentic replenishment buyer for small merchants.** It reads the shop's stock CSV, quotes the
-supplier catalog, drafts a purchase order that cannot exceed a hard budget, and — after a human
-approves it — pays the supplier through **PayPal Orders v2 in the sandbox**.
+**An agentic replenishment buyer for small merchants.** It reads the shop's stock CSV, prices the
+supplier catalog, drafts a purchase order that cannot exceed a hard budget, and **pays the supplier
+through PayPal Orders v2 inside a spending limit the merchant sets once** — with no human click on
+the payment. Over the limit, the server refuses and a person decides.
 
 Built for the [PayPal AI Hackathon](https://paypalaihackathon.devpost.com/) (Best Use of Agentic Commerce).
 
 ![Planned draft](docs/screenshot-plan.png)
+
+---
+
+## Judge's map: where to look for each criterion
+
+| Criterion | What to look at |
+|---|---|
+| **Technological Implementation** | `app/paypal_client.py` (Orders v2 + token refresh + reconciliation), `app/service.py` (approval token, atomic claim, policy check), `tests/test_boundaries.py` (23 cases, no network). Real captures are reconciled against PayPal in [`EVIDENCE.md`](EVIDENCE.md) — regenerate with `python -m scripts.audit_evidence`. |
+| **Design** | One screen, one decision: three KPIs at the top answer *what stocks out / what this order costs / what demand is not covered*; the draft table is editable; the green strip quotes the next purchase and its exact price with a button that re-plans. |
+| **Potential Impact** | A café reordering ten SKUs weekly either stocks out on a Friday or ties up cash in the wrong items. §[The problem](#the-problem). |
+| **Innovation** | The agent does not *suggest* a restock; it **prices the trade-off** and pays. `next_unlock` is re-computed and re-checked at the higher budget (`app/planner.py`), so "add $69.60 and you get four more cases" is verified, not guessed. |
+| **Presentation** | 68-second demo: one click → paid (capture id on screen) → the trade-off button → the limit refusing it → PayPal confirming the payment. Narrated, captions state the sandbox and declare the cut waits. |
 
 ---
 
@@ -20,14 +33,15 @@ supports both paths and picks one by env var:
 | `card` (default) | the agent holds a sandbox card on file, sends `payment_source.card` when creating the order, and PayPal settles inside that single call (`COMPLETED` + capture id) | autonomous agent checkout; headless demo; CI |
 | `approval` | the order is created without a payment source, the app surfaces the `checkoutnow?token=…` approval link, the payer approves in the PayPal sandbox, then `POST /api/capture` settles it | human-in-the-loop checkout, if a judge wants to click through PayPal |
 
-Evidence from a live sandbox run (`card` mode, verified back through `GET /v2/checkout/orders/{id}`):
+Both paths end in the same place: a real sandbox capture that can be checked against PayPal.
+[`EVIDENCE.md`](EVIDENCE.md) holds the reconciliation for every payment this repo claims:
 
 ```
-order 6X147398UT547322A · capture 1546868974354614C · USD 1191.10 · 2026-11-06T10:43:17Z
-status COMPLETED / capture status COMPLETED
+1S175593S0202690C  status=COMPLETED  capture=6G4474502P272802R  589.40 USD  -> OK   (agent, no human)
+6JB53388V74529227  status=COMPLETED  capture=14A20069V5594282Y  659.00 USD  -> OK   (human approved)
 ```
 
-The first attempt without a payment source was refused with `422 UNPROCESSABLE_ENTITY /
+The very first attempt without a payment source was refused with `422 UNPROCESSABLE_ENTITY /
 ORDER_NOT_APPROVED`, which is the documented behaviour and is what the `approval` mode is for.
 
 ![Paid in the sandbox](docs/screenshot-live.png)
