@@ -1,4 +1,4 @@
-.env
+﻿.env
 data/restock.db
 data/*.db-journal
 __pycache__/
@@ -9,10 +9,7 @@ venv/
 runs/
 
 # internal working notes (not part of the submission)
-ORACLE_BRIEF.md
-ORACLE_REVIEW_2.md
-RESEARCH.md
-DECISIONS.md
+ORACLE_*.md
 
 # recording / submission working notes (local only)
 VIDEO_SCRIPT.md
