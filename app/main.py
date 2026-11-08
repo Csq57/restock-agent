@@ -217,4 +217,12 @@ def events(limit: int = 100) -> dict[str, Any]:
 
 @app.get("/api/state")
 def state() -> dict[str, Any]:
-    return {"drafts": store.list_drafts(limit=10), "events": store.events(limit=50)}
+    """The review surface's own view of what exists.
+
+    Drafts are returned as reviewable, i.e. carrying the approval token, for the same reason
+    /api/plan does: the token is derived from the draft's current economics, so it is only valid
+    for exactly this state, and the browser is the surface that shows it to the human. Without
+    this, reloading the page would strand a draft that is sitting there waiting to be approved.
+    """
+    drafts = [_reviewable(d) for d in store.list_drafts(limit=10)]
+    return {"drafts": drafts, "events": store.events(limit=50)}

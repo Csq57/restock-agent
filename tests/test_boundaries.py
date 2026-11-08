@@ -270,6 +270,29 @@ class GuardTests(unittest.TestCase):
         self.assertNotIn("autopay_limit_usd", RunIn.model_fields,
                          "the standing limit must come from server config, not the request body")
 
+    def test_the_review_surface_hands_back_a_usable_token(self):
+        """Reloading the page must not strand a draft that is waiting for approval.
+
+        The UI keeps nothing in memory across a reload, so it re-reads /api/state. If that endpoint
+        returned drafts without a token, the Approve button would be enabled but every click would
+        come back 422 - which reads as a broken app rather than a missing field.
+        """
+        from app.main import _reviewable
+
+        d = self._draft(400)
+        reloaded = _reviewable(d)
+
+        self.assertIn("approval_token", reloaded)
+        self.assertEqual(reloaded["approval_token"], service.approval_token(d))
+        # and the token it hands back really does authorise this exact draft
+        order = service.create_order(d["id"], reloaded["approval_token"])
+        self.assertTrue(order["settled"])
+
+    def test_the_token_never_reaches_the_model(self):
+        out = tools.dispatch("draft_purchase_order", {}, {"budget": 300})
+        self.assertNotIn("approval_token", out)
+        self.assertNotIn("approval_token", tools.TOOL_SCHEMAS[2].get("description", ""))
+
     def test_limit_is_rechecked_after_the_draft_is_claimed(self):
         """The limit has to hold for the version that gets paid, not the one we read first."""
         d = self._draft(300)

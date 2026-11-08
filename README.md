@@ -107,7 +107,7 @@ returns.
 | **Crash recovery** | before every capture the order is re-read from PayPal; a charge whose local write was lost is repaired from PayPal's answer instead of being charged twice |
 | **Concurrent approve** | `claim_for_payment` moves the draft to `approving` inside one `BEGIN IMMEDIATE` transaction; a second caller loses the race |
 
-`tests/test_boundaries.py` covers all of them, offline, with no credentials (25 tests).
+`tests/test_boundaries.py` covers all of them, offline, with no credentials (29 tests).
 
 ## Architecture
 
@@ -201,7 +201,7 @@ This is the submitted cut, not a plan:
 | 0:42 | The limit is dropped to $100 and the same run is refused: `STOPPED`, `guard.policy_refused` in the log |
 | 0:50 | A human approves that one, producing a second capture |
 | 0:58 | `Verify with PayPal` returns `COMPLETED` with the same capture id this app recorded |
-| 1:06 | End card: repo, 25 tests, MIT |
+| 1:06 | End card: repo, 29 tests, MIT |
 
 The two real model waits are cut, and the cuts are declared on screen
 (`~40s of real model time omitted`) rather than hidden.

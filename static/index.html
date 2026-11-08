@@ -393,7 +393,24 @@ window.addEventListener("DOMContentLoaded", async () => {
   };
 
   await refreshEvents();
+  await restoreLastDraft();
 });
+
+// A reviewer reloads the page. The draft they were looking at is still on the server, so put it
+// back on screen instead of showing an empty shell and letting them wonder whether it was lost.
+async function restoreLastDraft() {
+  try {
+    const s = await api("/api/state");
+    const live = (s.drafts || []).filter((d) =>
+      ["draft", "edited", "awaiting_capture", "paid"].includes(d.status));
+    if (!live.length) return;
+    const latest = live[0];
+    loadDraft(latest, latest.trace);
+    setStatus("restored draft " + latest.id + " (" + latest.status + ") - nothing was lost on reload");
+  } catch (e) {
+    /* a missing state endpoint must not break the page */
+  }
+}
 </script>
 </body>
 </html>
