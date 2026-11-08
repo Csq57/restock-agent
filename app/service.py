@@ -72,13 +72,36 @@ def set_standing_limit(value: float) -> float:
 
 
 # ---------------------------------------------------------------- approval token
-def approval_token(draft: dict[str, Any]) -> str:
-    """Signs the exact reviewed state: draft id, total, and line count.
+def _line_digest(draft: dict[str, Any]) -> str:
+    """A stable digest of what is actually being bought, line by line.
 
-    Editing a quantity changes the total, which invalidates every token issued before the edit,
-    so an approval can never be replayed against a different amount.
+    Total and line count are not enough on their own: swapping one SKU for another at the same unit
+    price leaves both unchanged, so a token signed over only the totals would still authorise the
+    edit the reviewer never saw.
     """
-    msg = f"{draft['id']}:{float(draft['total']):.2f}:{len(draft.get('lines', []))}".encode()
+    parts = []
+    for line in draft.get("lines", []):
+        parts.append(
+            "{}:{}:{:.2f}".format(
+                str(line.get("sku", "")),
+                int(line.get("qty", 0) or 0),
+                float(line.get("unit_price", 0) or 0),
+            )
+        )
+    return hashlib.sha256("|".join(sorted(parts)).encode()).hexdigest()[:24]
+
+
+def approval_token(draft: dict[str, Any]) -> str:
+    """Signs the exact reviewed state: the draft, its economics, and what is in it.
+
+    Editing a quantity changes the total; editing prices or swapping a SKU changes the line digest.
+    Either way every token issued before the edit stops matching, so an approval can never be
+    replayed against a draft the reviewer did not see.
+    """
+    msg = (
+        f"{draft['id']}:{float(draft['total']):.2f}:"
+        f"{len(draft.get('lines', []))}:{_line_digest(draft)}"
+    ).encode()
     return hmac.new(_SECRET.encode(), msg, hashlib.sha256).hexdigest()[:32]
 
 

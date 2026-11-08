@@ -1,4 +1,4 @@
-﻿"""Boundary tests for every guard the judge can poke at.
+"""Boundary tests for every guard the judge can poke at.
 
 Run: python -m unittest discover -s tests -v
 No network, no credentials: PayPal is swapped for the in-process mock.
@@ -118,6 +118,25 @@ class GuardTests(unittest.TestCase):
     def test_token_is_not_part_of_what_the_model_sees(self):
         out = tools.dispatch("draft_purchase_order", {}, {"budget": 300})
         self.assertNotIn("approval_token", out)
+
+    def test_token_binds_line_contents_not_just_the_totals(self):
+        """Swapping what is being bought at the same price must invalidate the approval.
+
+        Total and line count alone would not catch this: replace one SKU with another at an
+        identical unit price and both stay put, so a token signed over only the economics would
+        still authorise a draft the reviewer never saw.
+        """
+        d = self._draft(300)
+        token = service.approval_token(d)
+
+        lines = [dict(line) for line in d["lines"]]
+        lines[0]["sku"] = "SKU-SWAPPED-AT-SAME-PRICE"
+        same_economics = dict(d, lines=lines)
+
+        self.assertEqual(len(same_economics["lines"]), len(d["lines"]))
+        self.assertAlmostEqual(same_economics["total"], d["total"], places=2)
+        self.assertNotEqual(service.approval_token(same_economics), token,
+                            "the token must change when the contents change, not only the totals")
 
     def test_concurrent_approval_cannot_win_twice(self):
         d = self._draft(300)
