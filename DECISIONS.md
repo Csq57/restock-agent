@@ -109,3 +109,5 @@ Non-trivial choices — the guard set, the token binding, the fallback chain —
 independent reviewer (an LLM used as a second opinion on the design, not as an author of it) before
 being built. Two of the guards above exist because that review asked "what happens if the model does
 this", and the answer at the time was "nothing stops it".
+
+---
