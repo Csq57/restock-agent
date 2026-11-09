@@ -312,6 +312,27 @@ class GuardTests(unittest.TestCase):
         self.assertFalse(self.mock.calls, "an over-limit draft must never reach PayPal")
         self.assertEqual(store.get_draft(d["id"])["status"], "draft", "the claim must be released")
 
+    def test_offline_switch_beats_real_credentials(self):
+        """A demo handed to someone else must not be able to spend real credentials.
+
+        The one-click demo sets RESTOCK_OFFLINE=1, but the same folder can still contain a .env
+        with live sandbox keys. If the switch did not win, "nothing is charged" would be false
+        exactly when a stranger is the one clicking.
+        """
+        from app.config import settings
+
+        live = dataclasses.replace(
+            settings, offline=False, client_id="id", client_secret="secret",
+            llm_api_key="key", llm_base_url="https://example.invalid",
+        )
+        self.assertTrue(live.has_paypal_creds)
+        self.assertTrue(live.has_llm)
+
+        demo = dataclasses.replace(live, offline=True)
+        self.assertFalse(demo.has_paypal_creds, "offline must beat real PayPal credentials")
+        self.assertFalse(demo.has_llm, "offline must beat a real model key")
+        self.assertFalse(demo.has_llm2, "offline must beat the second provider too")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

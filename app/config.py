@@ -44,18 +44,22 @@ class Settings:
     autopay_limit: float = float(os.getenv("AUTOPAY_LIMIT_USD", "0") or 0)
     # Signs the approval token that binds a human review to one exact draft state.
     approval_secret: str = os.getenv("APPROVAL_SECRET", "")
+    # Forces mock PayPal and the deterministic planner even when real credentials are present.
+    # A demo handed to someone else must never be able to charge the sandbox account or spend
+    # model quota, and "nothing is charged" has to stay true regardless of what .env contains.
+    offline: bool = os.getenv("RESTOCK_OFFLINE", "").strip().lower() not in ("", "0", "false", "no")
 
     @property
     def has_paypal_creds(self) -> bool:
-        return bool(self.client_id and self.client_secret)
+        return bool(self.client_id and self.client_secret) and not self.offline
 
     @property
     def has_llm(self) -> bool:
-        return bool(self.llm_api_key and self.llm_base_url)
+        return bool(self.llm_api_key and self.llm_base_url) and not self.offline
 
     @property
     def has_llm2(self) -> bool:
-        return bool(self.llm2_api_key and self.llm2_base_url and self.llm2_model)
+        return bool(self.llm2_api_key and self.llm2_base_url and self.llm2_model) and not self.offline
 
 
 settings = Settings()
